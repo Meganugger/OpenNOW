@@ -48,7 +48,14 @@ export interface Settings {
   windowWidth: number;
   /** Window height */
   windowHeight: number;
-}
+  /** Enable Discord Rich Presence */
+  discordPresenceEnabled: boolean;
+  /** Discord Application Client ID */
+  discordClientId: string;
+  /** Enable flight controls (HOTAS/joystick) */
+  flightControlsEnabled: boolean;
+  /** Controller slot for flight controls (0-3) */
+  flightControlsSlot: number;}
 
 const defaultStopShortcut = "Ctrl+Shift+Q";
 const defaultAntiAfkShortcut = "Ctrl+Shift+K";
@@ -79,7 +86,10 @@ const DEFAULT_SETTINGS: Settings = {
   sessionClockShowDurationSeconds: 30,
   windowWidth: 1400,
   windowHeight: 900,
-};
+  discordPresenceEnabled: false,
+  discordClientId: "",
+  flightControlsEnabled: false,
+  flightControlsSlot: 3,};
 
 export class SettingsManager {
   private settings: Settings;

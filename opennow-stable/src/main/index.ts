@@ -29,7 +29,8 @@ import type {
   VideoAccelerationPreference,
   SubscriptionFetchRequest,
   SessionConflictChoice,
-} from "@shared/gfn";
+  DiscordPresencePayload,
+  FlightProfile,} from "@shared/gfn";
 
 import { getSettingsManager, type SettingsManager } from "./settings";
 
@@ -44,7 +45,8 @@ import {
 import { fetchSubscription, fetchDynamicRegions } from "./gfn/subscription";
 import { GfnSignalingClient } from "./gfn/signaling";
 import { isSessionError, SessionError, GfnErrorCode } from "./gfn/errorCodes";
-
+import { DiscordPresenceService } from "./discord/DiscordPresenceService";
+import { FlightControlsService } from "./flight/FlightControlsService";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -184,7 +186,8 @@ let signalingClient: GfnSignalingClient | null = null;
 let signalingClientKey: string | null = null;
 let authService: AuthService;
 let settingsManager: SettingsManager;
-
+let discordService: DiscordPresenceService;
+let flightService: FlightControlsService;
 function emitToRenderer(event: MainToRendererSignalingEvent): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(IPC_CHANNELS.SIGNALING_EVENT, event);
@@ -489,7 +492,14 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.SETTINGS_SET, async <K extends keyof Settings>(_event: Electron.IpcMainInvokeEvent, key: K, value: Settings[K]) => {
     settingsManager.set(key, value);
-  });
+    if (key === "discordPresenceEnabled" || key === "discordClientId") {
+      const all = settingsManager.getAll();
+      void discordService.updateConfig(all.discordPresenceEnabled, all.discordClientId);
+    }
+    if (key === "flightControlsEnabled" || key === "flightControlsSlot") {
+      const all = settingsManager.getAll();
+      flightService.updateConfig(all.flightControlsEnabled, all.flightControlsSlot);
+    }  });
 
   ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async (): Promise<Settings> => {
     return settingsManager.reset();
@@ -498,6 +508,39 @@ function registerIpcHandlers(): void {
   // Logs export IPC handler
   ipcMain.handle(IPC_CHANNELS.LOGS_EXPORT, async (_event, format: "text" | "json" = "text"): Promise<string> => {
     return exportLogs(format);
+  });
+
+  // Flight Controls IPC handlers
+  ipcMain.handle(IPC_CHANNELS.FLIGHT_GET_DEVICES, () => {
+    return flightService.getDevices();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.FLIGHT_START_CAPTURE, (_event, devicePath: string) => {
+    return flightService.startCapture(devicePath);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.FLIGHT_STOP_CAPTURE, () => {
+    flightService.stopCapture();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.FLIGHT_GET_PROFILE, (_event, vidPid: string, gameId?: string) => {
+    return flightService.profileManager.getProfile(vidPid, gameId);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.FLIGHT_SET_PROFILE, (_event, profile: FlightProfile) => {
+    flightService.profileManager.setProfile(profile);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.FLIGHT_DELETE_PROFILE, (_event, vidPid: string, gameId?: string) => {
+    flightService.profileManager.deleteProfile(vidPid, gameId);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.FLIGHT_GET_ALL_PROFILES, () => {
+    return flightService.profileManager.getAllProfiles();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.FLIGHT_RESET_PROFILE, (_event, vidPid: string) => {
+    return flightService.profileManager.resetProfile(vidPid);
   });
 
   // Save window size when it changes
@@ -569,8 +612,17 @@ app.whenReady().then(async () => {
     return allowedPermissions.has(permission);
   });
 
+  flightService = new FlightControlsService(
+    allSettings.flightControlsEnabled,
+    allSettings.flightControlsSlot,
+  );
+  flightService.initialize();
+
   registerIpcHandlers();
   await createMainWindow();
+  if (mainWindow) {
+    flightService.setMainWindow(mainWindow);
+  }
 
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -589,7 +641,8 @@ app.on("before-quit", () => {
   signalingClient?.disconnect();
   signalingClient = null;
   signalingClientKey = null;
-});
+  void discordService.dispose();
+  flightService.dispose();});
 
 // Export for use by other modules
 export { showSessionConflictDialog, isSessionConflictError };

@@ -13,7 +13,8 @@ import type {
   SubscriptionInfo,
   StreamRegion,
   VideoCodec,
-} from "@shared/gfn";
+  DiscordPresencePayload,
+  FlightGamepadState,} from "@shared/gfn";
 
 import {
   GfnWebRtcClient,
@@ -286,7 +287,10 @@ export function App(): JSX.Element {
     sessionClockShowDurationSeconds: 30,
     windowWidth: 1400,
     windowHeight: 900,
-  });
+    discordPresenceEnabled: false,
+    discordClientId: "",
+    flightControlsEnabled: false,
+    flightControlsSlot: 3,  });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [regions, setRegions] = useState<StreamRegion[]>([]);
   const [subscriptionInfo, setSubscriptionInfo] = useState<SubscriptionInfo | null>(null);
@@ -658,7 +662,64 @@ export function App(): JSX.Element {
     return () => window.clearInterval(timer);
   }, [sessionStartedAtMs, streamStatus]);
 
+  // Discord Rich Presence updates
   useEffect(() => {
+    if (!settings.discordPresenceEnabled || !settings.discordClientId) {
+      return;
+    }
+
+    let payload: DiscordPresencePayload;
+
+    if (streamStatus === "idle") {
+      payload = { type: "idle" };
+    } else if (streamStatus === "queue" || streamStatus === "setup") {
+      const queueTitle = streamingGame?.title?.trim() || lastStreamGameTitleRef.current || undefined;
+      payload = {
+        type: "queue",
+        gameName: queueTitle,
+        queuePosition,
+      };
+    } else {
+      const hasDiag = diagnostics.resolution !== "" || diagnostics.bitrateKbps > 0;
+      const gameTitle = streamingGame?.title?.trim() || lastStreamGameTitleRef.current || undefined;
+      payload = {
+        type: "streaming",
+        gameName: gameTitle,
+        startTimestamp: sessionStartedAtMs ?? undefined,
+        ...(hasDiag && diagnostics.resolution ? { resolution: diagnostics.resolution } : {}),
+        ...(hasDiag && diagnostics.decodeFps > 0 ? { fps: diagnostics.decodeFps } : {}),
+        ...(hasDiag && diagnostics.bitrateKbps > 0 ? { bitrateMbps: Math.round(diagnostics.bitrateKbps / 100) / 10 } : {}),
+      };
+    }
+
+    window.openNow.updateDiscordPresence(payload).catch(() => {});
+  }, [
+    streamStatus,
+    streamingGame?.title,
+    sessionStartedAtMs,
+    queuePosition,
+    diagnostics.resolution,
+    diagnostics.decodeFps,
+    diagnostics.bitrateKbps,
+    settings.discordPresenceEnabled,
+    settings.discordClientId,
+  ]);
+
+  // Clear Discord presence on logout
+  useEffect(() => {
+    if (!authSession) {
+      window.openNow.clearDiscordPresence().catch(() => {});
+    }
+  }, [authSession]);
+
+  // Flight controls: forward gamepad state from main process to WebRTC client
+  useEffect(() => {
+    if (!settings.flightControlsEnabled) return;
+    const unsubscribe = window.openNow.onFlightGamepadState((state: FlightGamepadState) => {
+      clientRef.current?.injectExternalGamepad(state);
+    });
+    return unsubscribe;
+  }, [settings.flightControlsEnabled]);  useEffect(() => {
     if (!streamWarning) return;
     const warning = streamWarning;
     const timer = window.setTimeout(() => {
