@@ -303,6 +303,7 @@ export function App(): JSX.Element {
   const sessionRef = useRef<SessionInfo | null>(null);
   const hasInitializedRef = useRef(false);
   const regionsRequestRef = useRef(0);
+  const lastStreamGameTitleRef = useRef<string | null>(null);
   const launchInFlightRef = useRef(false);
   const exitPromptResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
 
@@ -604,14 +605,15 @@ export function App(): JSX.Element {
     if (streamStatus === "idle") {
       payload = { type: "idle" };
     } else if (streamStatus === "queue" || streamStatus === "setup") {
+      const queueTitle = streamingGame?.title?.trim() || lastStreamGameTitleRef.current || undefined;
       payload = {
         type: "queue",
-        gameName: streamingGame?.title?.trim() || undefined,
+        gameName: queueTitle,
         queuePosition,
       };
     } else {
       const hasDiag = diagnostics.resolution !== "" || diagnostics.bitrateKbps > 0;
-      const gameTitle = streamingGame?.title?.trim() || undefined;
+      const gameTitle = streamingGame?.title?.trim() || lastStreamGameTitleRef.current || undefined;
       payload = {
         type: "streaming",
         gameName: gameTitle,
@@ -711,6 +713,7 @@ export function App(): JSX.Element {
           setStreamStatus("idle");
           setSession(null);
           setStreamingGame(null);
+          lastStreamGameTitleRef.current = null;
           setLaunchError(null);
           setSessionStartedAtMs(null);
           setSessionElapsedSeconds(0);
@@ -892,6 +895,7 @@ export function App(): JSX.Element {
     setStreamWarning(null);
     setLaunchError(null);
     setStreamingGame(game);
+    lastStreamGameTitleRef.current = game.title?.trim() || null;
     updateLoadingStep("queue");
     setQueuePosition(undefined);
 
@@ -1060,6 +1064,7 @@ export function App(): JSX.Element {
     setSessionStartedAtMs(Date.now());
     setSessionElapsedSeconds(0);
     setStreamWarning(null);
+    lastStreamGameTitleRef.current = activeSessionGameTitle?.trim() || null;
     updateLoadingStep("setup");
 
     try {
@@ -1116,6 +1121,7 @@ export function App(): JSX.Element {
       setSession(null);
       setStreamStatus("idle");
       setStreamingGame(null);
+      lastStreamGameTitleRef.current = null;
       setNavbarActiveSession(null);
       setLaunchError(null);
       setSessionStartedAtMs(null);
@@ -1136,6 +1142,7 @@ export function App(): JSX.Element {
     setSession(null);
     setLaunchError(null);
     setStreamingGame(null);
+    lastStreamGameTitleRef.current = null;
     setQueuePosition(undefined);
     setSessionStartedAtMs(null);
     setSessionElapsedSeconds(0);
