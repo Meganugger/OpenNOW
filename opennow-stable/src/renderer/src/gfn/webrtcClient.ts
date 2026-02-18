@@ -4,6 +4,7 @@ import type {
   IceServer,
   SessionInfo,
   VideoCodec,
+  FlightGamepadState,
 } from "@shared/gfn";
 
 import {
@@ -469,6 +470,7 @@ export class GfnWebRtcClient {
   private renderFpsCounter = { frames: 0, lastUpdate: 0, fps: 0 };
   private connectedGamepads: Set<number> = new Set();
   private previousGamepadStates: Map<number, GamepadInput> = new Map();
+  private externalGamepadSlots: Set<number> = new Set();
 
   // Track currently pressed keys (VK codes) for synthetic Escape detection
   private pressedKeys: Set<number> = new Set();
@@ -1164,6 +1166,9 @@ export class GfnWebRtcClient {
     const nowMs = performance.now();
 
     for (let i = 0; i < Math.min(gamepads.length, GAMEPAD_MAX_CONTROLLERS); i++) {
+      if (this.externalGamepadSlots.has(i)) {
+        continue;
+      }
       const gamepad = gamepads[i];
 
       if (gamepad && gamepad.connected) {
@@ -1648,6 +1653,73 @@ export class GfnWebRtcClient {
     this.sendKeyPacket(0x7c, 0x64, 0, true); // F13 down
     window.setTimeout(() => this.sendKeyPacket(0x7c, 0x64, 0, false), 50); // F13 up
     return true;
+  }
+
+  public injectExternalGamepad(raw: FlightGamepadState): void {
+    if (!this.inputReady) return;
+
+    const slot = raw.controllerId;
+    if (slot < 0 || slot >= GAMEPAD_MAX_CONTROLLERS) return;
+
+    const state: GamepadInput = {
+      controllerId: slot,
+      buttons: raw.buttons,
+      leftTrigger: raw.leftTrigger,
+      rightTrigger: raw.rightTrigger,
+      leftStickX: raw.leftStickX,
+      leftStickY: raw.leftStickY,
+      rightStickX: raw.rightStickX,
+      rightStickY: raw.rightStickY,
+      connected: raw.connected,
+      timestampUs: timestampUs(),
+    };
+
+    if (raw.connected && !this.externalGamepadSlots.has(slot)) {
+      this.externalGamepadSlots.add(slot);
+      this.connectedGamepads.add(slot);
+      this.gamepadBitmap |= (1 << slot);
+      this.log(`External gamepad connected on slot ${slot} (flight controls)`);
+      this.diagnostics.connectedGamepads = this.connectedGamepads.size;
+      this.emitStats();
+    } else if (!raw.connected && this.externalGamepadSlots.has(slot)) {
+      this.externalGamepadSlots.delete(slot);
+      this.connectedGamepads.delete(slot);
+      this.previousGamepadStates.delete(slot);
+      this.gamepadBitmap &= ~(1 << slot);
+      this.log(`External gamepad disconnected from slot ${slot}`);
+      this.diagnostics.connectedGamepads = this.connectedGamepads.size;
+      this.emitStats();
+      const usePR = this.mouseInputChannel?.readyState === "open";
+      const bytes = this.inputEncoder.encodeGamepadState(state, this.gamepadBitmap, usePR);
+      this.sendGamepad(bytes);
+      return;
+    }
+
+    if (!raw.connected) return;
+
+    const stateChanged = this.hasGamepadStateChanged(slot, state);
+    const nowMs = performance.now();
+    const needsKeepalive =
+      !stateChanged && (nowMs - this.lastGamepadSendMs) >= GfnWebRtcClient.GAMEPAD_KEEPALIVE_MS;
+
+    if (stateChanged || needsKeepalive) {
+      const usePR = this.mouseInputChannel?.readyState === "open";
+      const bytes = this.inputEncoder.encodeGamepadState(state, this.gamepadBitmap, usePR);
+      this.sendGamepad(bytes);
+      this.lastGamepadSendMs = nowMs;
+
+      if (stateChanged) {
+        this.previousGamepadStates.set(slot, { ...state });
+        this.lastGamepadActivityMs = nowMs;
+      }
+
+      if (this.activeInputMode !== "gamepad") {
+        this.activeInputMode = "gamepad";
+        this.pendingMouseDx = 0;
+        this.pendingMouseDy = 0;
+        this.log("Input mode → gamepad (flight controls)");
+      }
+    }
   }
 
   public sendPasteShortcut(useMeta: boolean): boolean {

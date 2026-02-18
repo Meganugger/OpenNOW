@@ -43,6 +43,8 @@ export interface Settings {
   windowHeight: number;
   discordPresenceEnabled: boolean;
   discordClientId: string;
+  flightControlsEnabled: boolean;
+  flightControlsSlot: number;
 }
 
 export interface LoginProvider {
@@ -322,6 +324,113 @@ export interface OpenNowApi {
   resetSettings(): Promise<Settings>;
   updateDiscordPresence(state: DiscordPresencePayload): Promise<void>;
   clearDiscordPresence(): Promise<void>;
+  flightGetDevices(): Promise<FlightDeviceInfo[]>;
+  flightStartCapture(devicePath: string): Promise<boolean>;
+  flightStopCapture(): Promise<void>;
+  flightGetProfile(vidPid: string, gameId?: string): Promise<FlightProfile | null>;
+  flightSetProfile(profile: FlightProfile): Promise<void>;
+  flightDeleteProfile(vidPid: string, gameId?: string): Promise<void>;
+  flightGetAllProfiles(): Promise<FlightProfile[]>;
+  flightResetProfile(vidPid: string): Promise<FlightProfile | null>;
+  onFlightStateUpdate(listener: (state: FlightControlsState) => void): () => void;
+  onFlightGamepadState(listener: (state: FlightGamepadState) => void): () => void;
+}
+
+export type FlightAxisTarget =
+  | "leftStickX"
+  | "leftStickY"
+  | "rightStickX"
+  | "rightStickY"
+  | "leftTrigger"
+  | "rightTrigger";
+
+export type FlightSensitivityCurve = "linear" | "expo";
+
+export interface FlightHidAxisSource {
+  byteOffset: number;
+  byteCount: 1 | 2;
+  littleEndian: boolean;
+  unsigned: boolean;
+  rangeMin: number;
+  rangeMax: number;
+}
+
+export interface FlightHidButtonSource {
+  byteOffset: number;
+  bitIndex: number;
+}
+
+export interface FlightHidHatSource {
+  byteOffset: number;
+  bitOffset: number;
+  bitCount: 4 | 8;
+  centerValue: number;
+}
+
+export interface FlightHidReportLayout {
+  skipReportId: boolean;
+  reportLength: number;
+  axes: FlightHidAxisSource[];
+  buttons: FlightHidButtonSource[];
+  hat?: FlightHidHatSource;
+}
+
+export interface FlightAxisMapping {
+  sourceIndex: number;
+  target: FlightAxisTarget;
+  inverted: boolean;
+  deadzone: number;
+  sensitivity: number;
+  curve: FlightSensitivityCurve;
+}
+
+export interface FlightButtonMapping {
+  sourceIndex: number;
+  targetButton: number;
+}
+
+export interface FlightDeviceInfo {
+  path: string;
+  vendorId: number;
+  productId: number;
+  product: string;
+  manufacturer: string;
+  serialNumber: string;
+  release: number;
+  interface: number;
+  usagePage: number;
+  usage: number;
+}
+
+export interface FlightProfile {
+  name: string;
+  vidPid: string;
+  deviceName: string;
+  axisMappings: FlightAxisMapping[];
+  buttonMappings: FlightButtonMapping[];
+  reportLayout?: FlightHidReportLayout;
+  gameId?: string;
+}
+
+export interface FlightControlsState {
+  connected: boolean;
+  deviceName: string;
+  axes: number[];
+  buttons: boolean[];
+  hatSwitch: number;
+  rawBytes: number[];
+}
+
+export interface FlightGamepadState {
+  controllerId: number;
+  buttons: number;
+  leftTrigger: number;
+  rightTrigger: number;
+  leftStickX: number;
+  leftStickY: number;
+  rightStickX: number;
+  rightStickY: number;
+  connected: boolean;
 }
 
 export interface DiscordPresencePayload {

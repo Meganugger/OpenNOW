@@ -40,6 +40,10 @@ export interface Settings {
   discordPresenceEnabled: boolean;
   /** Discord Application Client ID */
   discordClientId: string;
+  /** Enable flight controls (HOTAS/joystick) */
+  flightControlsEnabled: boolean;
+  /** Controller slot for flight controls (0-3) */
+  flightControlsSlot: number;
 }
 
 const defaultStopShortcut = "Ctrl+Shift+Q";
@@ -66,6 +70,8 @@ const DEFAULT_SETTINGS: Settings = {
   windowHeight: 900,
   discordPresenceEnabled: false,
   discordClientId: "",
+  flightControlsEnabled: false,
+  flightControlsSlot: 3,
 };
 
 export class SettingsManager {

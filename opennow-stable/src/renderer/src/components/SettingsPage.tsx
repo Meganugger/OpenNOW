@@ -1,4 +1,4 @@
-import { Monitor, Volume2, Mouse, Settings2, Globe, Save, Check, Search, X, Loader, Cpu, Zap, MessageSquare } from "lucide-react";
+import { Monitor, Volume2, Mouse, Settings2, Globe, Save, Check, Search, X, Loader, Cpu, Zap, MessageSquare, Joystick } from "lucide-react";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import type { JSX } from "react";
 
@@ -12,6 +12,7 @@ import type {
 } from "@shared/gfn";
 import { colorQualityRequiresHevc } from "@shared/gfn";
 import { formatShortcutForDisplay, normalizeShortcut } from "../shortcuts";
+import { FlightControlsPanel } from "./FlightControlsPanel";
 
 interface SettingsPageProps {
   settings: Settings;
@@ -1138,6 +1139,20 @@ export function SettingsPage({ settings, regions, onSettingChange }: SettingsPag
                 Create an application at discord.com/developers and paste its Client ID here.
               </span>
             </div>
+          </div>
+        </section>
+
+        {/* ── Flight Controls ──────────────────────────────── */}
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <Joystick size={18} />
+            <h2>Flight Controls</h2>
+          </div>
+          <div className="settings-rows">
+            <FlightControlsPanel
+              settings={settings}
+              onSettingChange={handleChange}
+            />
           </div>
         </section>
       </div>

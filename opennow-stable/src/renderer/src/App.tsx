@@ -14,6 +14,7 @@ import type {
   StreamRegion,
   VideoCodec,
   DiscordPresencePayload,
+  FlightGamepadState,
 } from "@shared/gfn";
 
 import {
@@ -271,6 +272,8 @@ export function App(): JSX.Element {
     windowHeight: 900,
     discordPresenceEnabled: false,
     discordClientId: "",
+    flightControlsEnabled: false,
+    flightControlsSlot: 3,
   });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [regions, setRegions] = useState<StreamRegion[]>([]);
@@ -643,6 +646,15 @@ export function App(): JSX.Element {
       window.openNow.clearDiscordPresence().catch(() => {});
     }
   }, [authSession]);
+
+  // Flight controls: forward gamepad state from main process to WebRTC client
+  useEffect(() => {
+    if (!settings.flightControlsEnabled) return;
+    const unsubscribe = window.openNow.onFlightGamepadState((state: FlightGamepadState) => {
+      clientRef.current?.injectExternalGamepad(state);
+    });
+    return unsubscribe;
+  }, [settings.flightControlsEnabled]);
 
   useEffect(() => {
     if (!streamWarning) return;
