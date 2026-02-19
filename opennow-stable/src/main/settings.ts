@@ -1,7 +1,8 @@
 import { app } from "electron";
 import { join } from "node:path";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import type { VideoCodec, ColorQuality, VideoAccelerationPreference } from "@shared/gfn";
+import type { VideoCodec, ColorQuality, VideoAccelerationPreference, FlightSlotConfig } from "@shared/gfn";
+import { defaultFlightSlots } from "@shared/gfn";
 
 export interface Settings {
   /** Video resolution (e.g., "1920x1080") */
@@ -42,8 +43,10 @@ export interface Settings {
   discordClientId: string;
   /** Enable flight controls (HOTAS/joystick) */
   flightControlsEnabled: boolean;
-  /** Controller slot for flight controls (0-3) */
+  /** Controller slot for flight controls (0-3) — legacy, kept for compat */
   flightControlsSlot: number;
+  /** Per-slot flight configurations */
+  flightSlots: FlightSlotConfig[];
 }
 
 const defaultStopShortcut = "Ctrl+Shift+Q";
@@ -72,6 +75,7 @@ const DEFAULT_SETTINGS: Settings = {
   discordClientId: "",
   flightControlsEnabled: false,
   flightControlsSlot: 3,
+  flightSlots: defaultFlightSlots(),
 };
 
 export class SettingsManager {
@@ -100,6 +104,10 @@ export class SettingsManager {
         ...DEFAULT_SETTINGS,
         ...parsed,
       };
+
+      if (!Array.isArray(merged.flightSlots) || merged.flightSlots.length !== 4) {
+        merged.flightSlots = defaultFlightSlots();
+      }
 
       const migrated = this.migrateLegacyShortcutDefaults(merged);
       if (migrated) {

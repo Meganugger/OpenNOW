@@ -13,6 +13,7 @@ import type {
 import { colorQualityRequiresHevc } from "@shared/gfn";
 import { formatShortcutForDisplay, normalizeShortcut } from "../shortcuts";
 import { FlightControlsPanel } from "./FlightControlsPanel";
+import { useToast } from "./Toast";
 
 interface SettingsPageProps {
   settings: Settings;
@@ -415,6 +416,7 @@ async function testCodecSupport(): Promise<CodecTestResult[]> {
 
 export function SettingsPage({ settings, regions, onSettingChange }: SettingsPageProps): JSX.Element {
   const [savedIndicator, setSavedIndicator] = useState(false);
+  const { showToast } = useToast();
   const [regionSearch, setRegionSearch] = useState("");
   const [regionDropdownOpen, setRegionDropdownOpen] = useState(false);
 
@@ -1160,8 +1162,7 @@ export function SettingsPage({ settings, regions, onSettingChange }: SettingsPag
         <button
           className="settings-save-btn"
           onClick={() => {
-            setSavedIndicator(true);
-            setTimeout(() => setSavedIndicator(false), 1500);
+            showToast("Settings saved", "success");
           }}
         >
           <Save size={16} />

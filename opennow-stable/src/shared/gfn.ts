@@ -45,6 +45,7 @@ export interface Settings {
   discordClientId: string;
   flightControlsEnabled: boolean;
   flightControlsSlot: number;
+  flightSlots: FlightSlotConfig[];
 }
 
 export interface LoginProvider {
@@ -392,6 +393,23 @@ export interface FlightProfile {
   buttonMappings: FlightButtonMapping[];
   reportLayout?: FlightHidReportLayout;
   gameId?: string;
+}
+
+export interface FlightSlotConfig {
+  enabled: boolean;
+  deviceKey: string | null;
+  vidPid: string | null;
+  deviceName: string | null;
+}
+
+export function makeDeviceKey(vendorId: number, productId: number, name: string): string {
+  const vid = vendorId.toString(16).toUpperCase().padStart(4, "0");
+  const pid = productId.toString(16).toUpperCase().padStart(4, "0");
+  return `${vid}:${pid}:${name}`;
+}
+
+export function defaultFlightSlots(): FlightSlotConfig[] {
+  return [0, 1, 2, 3].map(() => ({ enabled: false, deviceKey: null, vidPid: null, deviceName: null }));
 }
 
 export interface FlightControlsState {
