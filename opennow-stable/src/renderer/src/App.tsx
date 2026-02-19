@@ -16,7 +16,9 @@ import type {
   DiscordPresencePayload,
   FlightGamepadState,} from "@shared/gfn";
 } from "@shared/gfn";
-import {
+  FlightSlotConfig,
+} from "@shared/gfn";
+import { defaultFlightSlots } from "@shared/gfn";import {
   GfnWebRtcClient,
   type StreamDiagnostics,
   type StreamTimeWarning,
@@ -291,7 +293,9 @@ export function App(): JSX.Element {
     discordClientId: "",
     flightControlsEnabled: false,
     flightControlsSlot: 3,  });
-  const [settingsLoaded, setSettingsLoaded] = useState(false);
+    flightControlsSlot: 3,
+    flightSlots: defaultFlightSlots(),
+  });  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [regions, setRegions] = useState<StreamRegion[]>([]);
   const [subscriptionInfo, setSubscriptionInfo] = useState<SubscriptionInfo | null>(null);
 
@@ -712,32 +716,40 @@ export function App(): JSX.Element {
     }
   }, [authSession]);
 
-  // Flight controls: forward WebHID gamepad state to WebRTC client
-  const flightSlotRef = useRef<number | null>(null);
+  // Flight controls: forward WebHID gamepad state to WebRTC client (multi-slot)
+  const activeFlightSlotsRef = useRef<Set<number>>(new Set());
   useEffect(() => {
     if (!settings.flightControlsEnabled) {
-      if (flightSlotRef.current !== null && clientRef.current) {
-        clientRef.current.releaseExternalGamepad(flightSlotRef.current);
+      for (const s of activeFlightSlotsRef.current) {
+        clientRef.current?.releaseExternalGamepad(s);
       }
-      flightSlotRef.current = null;
+      activeFlightSlotsRef.current.clear();
       return;
     }
-    const newSlot = settings.flightControlsSlot;
-    const oldSlot = flightSlotRef.current;
-    if (oldSlot !== null && oldSlot !== newSlot && clientRef.current) {
-      clientRef.current.releaseExternalGamepad(oldSlot);
+
+    const slots: FlightSlotConfig[] = Array.isArray(settings.flightSlots) && settings.flightSlots.length === 4
+      ? settings.flightSlots : defaultFlightSlots();
+
+    const wantedSlots = new Set<number>();
+    for (let i = 0; i < 4; i++) {
+      if (slots[i]!.enabled && slots[i]!.deviceKey) wantedSlots.add(i);
     }
-    flightSlotRef.current = newSlot;
+
+    for (const s of activeFlightSlotsRef.current) {
+      if (!wantedSlots.has(s)) {
+        clientRef.current?.releaseExternalGamepad(s);
+      }
+    }
+    activeFlightSlotsRef.current = wantedSlots;
 
     const service = getFlightHidService();
-    service.controllerSlot = newSlot;
     const unsub = service.onGamepadState((state) => {
       clientRef.current?.injectExternalGamepad(state);
     });
     return unsubscribe;
   }, [settings.flightControlsEnabled]);  useEffect(() => {
     return unsub;
-  }, [settings.flightControlsEnabled, settings.flightControlsSlot]);
+  }, [settings.flightControlsEnabled, settings.flightSlots]);
 
   useEffect(() => {    if (!streamWarning) return;
     const warning = streamWarning;

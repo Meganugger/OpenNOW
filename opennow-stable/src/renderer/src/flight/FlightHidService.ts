@@ -28,6 +28,14 @@ interface ParsedReport {
   hatSwitch: number;
 }
 
+interface SlotCapture {
+  device: HIDDevice;
+  profile: FlightProfile;
+  reportLayout: FlightHidReportLayout | null;
+  boundHandler: (event: HIDInputReportEvent) => void;
+  lastGamepadState: FlightGamepadState | null;
+}
+
 function logDevice(device: HIDDevice, tag: string): void {
   const collections = device.collections.map((c) => ({
     usagePage: `0x${c.usagePage.toString(16).padStart(2, "0")}`,
@@ -60,27 +68,16 @@ export function classifyDevice(device: HIDDevice, showAll: boolean): boolean {
   return false;
 }
 
+export type SlotStateListener = (slot: number, state: FlightControlsState) => void;
+export type SlotGamepadListener = (state: FlightGamepadState) => void;
+
 export class FlightHidService {
-  private device: HIDDevice | null = null;
-  private profile: FlightProfile | null = null;
-  private reportLayout: FlightHidReportLayout | null = null;
-  private _controllerSlot = 3;
-  private _capturing = false;
-  private lastGamepadState: FlightGamepadState | null = null;
-  private stateListeners = new Set<(state: FlightControlsState) => void>();
-  private gamepadListeners = new Set<(state: FlightGamepadState) => void>();
-  private boundOnInputReport: ((event: HIDInputReportEvent) => void) | null = null;
+  private slots = new Map<number, SlotCapture>();
+  private stateListeners = new Set<SlotStateListener>();
+  private gamepadListeners = new Set<SlotGamepadListener>();
 
   static isSupported(): boolean {
     return typeof navigator !== "undefined" && "hid" in navigator;
-  }
-
-  get controllerSlot(): number {
-    return this._controllerSlot;
-  }
-
-  set controllerSlot(slot: number) {
-    this._controllerSlot = Math.max(0, Math.min(3, slot));
   }
 
   async getDevices(showAll = false): Promise<HIDDevice[]> {
@@ -103,137 +100,148 @@ export class FlightHidService {
           { usagePage: GENERIC_INPUT_PAGE, usage: USAGE_JOYSTICK },
           { usagePage: GENERIC_INPUT_PAGE, usage: USAGE_GAMEPAD },
           { usagePage: GENERIC_INPUT_PAGE, usage: USAGE_MULTIAXIS },
-          {},
         ],
       });
       for (const d of devices) logDevice(d, "request");
       return devices;
-    } catch (e) {
-      console.warn("[Flight] requestDevice cancelled or failed:", e);
-      return [];
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === "NotAllowedError") {
+        console.log("[Flight] requestDevice cancelled by user");
+        return [];
+      }
+      console.warn("[Flight] requestDevice failed:", e);
+      throw e;
     }
   }
 
-  async startCapture(device: HIDDevice, profile: FlightProfile): Promise<boolean> {
-    this.stopCapture();
+  async startCapture(slot: number, device: HIDDevice, profile: FlightProfile): Promise<boolean> {
+    this.stopCapture(slot);
 
     try {
       if (!device.opened) {
         await device.open();
       }
 
-      this.device = device;
-      this.profile = profile;
-
       const knownConfig = getDeviceConfig(device.vendorId, device.productId);
-      this.reportLayout = profile.reportLayout ?? knownConfig?.layout ?? null;
+      const reportLayout = profile.reportLayout ?? knownConfig?.layout ?? null;
 
-      if (!this.reportLayout) {
-        console.warn(`[Flight] No report layout for ${makeVidPid(device.vendorId, device.productId)}, using raw mode`);
+      if (!reportLayout) {
+        console.warn(`[Flight] No report layout for slot ${slot} device ${makeVidPid(device.vendorId, device.productId)}, using raw mode`);
       }
 
       const vidPid = makeVidPid(device.vendorId, device.productId);
-      console.log(`[Flight] Opened device: ${device.productName} (${vidPid})`);
+      console.log(`[Flight] Slot ${slot}: Opened device ${device.productName} (${vidPid})`);
 
-      this.boundOnInputReport = (event: HIDInputReportEvent) => {
-        this.handleInputReport(event);
+      const capture: SlotCapture = {
+        device,
+        profile,
+        reportLayout,
+        lastGamepadState: null,
+        boundHandler: (event: HIDInputReportEvent) => {
+          this.handleInputReport(slot, capture, event);
+        },
       };
-      device.addEventListener("inputreport", this.boundOnInputReport);
 
-      this._capturing = true;
-      this.sendConnectedState(true);
+      device.addEventListener("inputreport", capture.boundHandler);
+      this.slots.set(slot, capture);
+
+      this.emitSlotState(slot, {
+        connected: true,
+        deviceName: device.productName ?? "",
+        axes: [], buttons: [], hatSwitch: -1, rawBytes: [],
+      });
       return true;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.warn("[Flight] Failed to open device:", msg);
-      this.device = null;
-      this.profile = null;
-      this._capturing = false;
+      console.warn(`[Flight] Slot ${slot}: Failed to open device:`, msg);
       return false;
     }
   }
 
-  stopCapture(): void {
-    if (this.device && this.boundOnInputReport) {
-      this.device.removeEventListener("inputreport", this.boundOnInputReport);
-      this.boundOnInputReport = null;
+  stopCapture(slot: number): void {
+    const capture = this.slots.get(slot);
+    if (!capture) return;
+
+    capture.device.removeEventListener("inputreport", capture.boundHandler);
+    this.slots.delete(slot);
+
+    console.log(`[Flight] Slot ${slot}: Capture stopped`);
+
+    this.emitSlotState(slot, {
+      connected: false,
+      deviceName: capture.device.productName ?? "",
+      axes: [], buttons: [], hatSwitch: -1, rawBytes: [],
+    });
+
+    const disconnectState: FlightGamepadState = {
+      controllerId: slot,
+      buttons: 0, leftTrigger: 0, rightTrigger: 0,
+      leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
+      connected: false,
+    };
+    this.emitGamepadState(disconnectState);
+  }
+
+  stopAll(): void {
+    for (const s of [...this.slots.keys()]) {
+      this.stopCapture(s);
     }
-
-    if (this._capturing) {
-      this.sendConnectedState(false);
-      this._capturing = false;
-      this.lastGamepadState = null;
-      console.log("[Flight] Device capture stopped");
-    }
-
-    this.device = null;
-    this.profile = null;
   }
 
-  isCapturing(): boolean {
-    return this._capturing;
+  isCapturing(slot: number): boolean {
+    return this.slots.has(slot);
   }
 
-  getActiveDevice(): HIDDevice | null {
-    return this.device;
+  getActiveSlots(): number[] {
+    return [...this.slots.keys()];
   }
 
-  onStateUpdate(listener: (state: FlightControlsState) => void): () => void {
+  onStateUpdate(listener: SlotStateListener): () => void {
     this.stateListeners.add(listener);
     return () => this.stateListeners.delete(listener);
   }
 
-  onGamepadState(listener: (state: FlightGamepadState) => void): () => void {
+  onGamepadState(listener: SlotGamepadListener): () => void {
     this.gamepadListeners.add(listener);
     return () => this.gamepadListeners.delete(listener);
   }
 
   dispose(): void {
-    this.stopCapture();
+    this.stopAll();
     this.stateListeners.clear();
     this.gamepadListeners.clear();
   }
 
-  private handleInputReport(event: HIDInputReportEvent): void {
+  private handleInputReport(slot: number, capture: SlotCapture, event: HIDInputReportEvent): void {
     const data = event.data;
 
-    if (!this.reportLayout || !this.profile) {
+    if (!capture.reportLayout || !capture.profile) {
       const rawBytes: number[] = [];
-      for (let i = 0; i < data.byteLength; i++) {
-        rawBytes.push(data.getUint8(i));
-      }
-      const state: FlightControlsState = {
+      for (let i = 0; i < data.byteLength; i++) rawBytes.push(data.getUint8(i));
+      this.emitSlotState(slot, {
         connected: true,
-        deviceName: this.device?.productName ?? "",
-        axes: [],
-        buttons: [],
-        hatSwitch: -1,
-        rawBytes,
-      };
-      this.emitStateUpdate(state);
+        deviceName: capture.device.productName ?? "",
+        axes: [], buttons: [], hatSwitch: -1, rawBytes,
+      });
       return;
     }
 
-    const parsed = this.parseReport(data, this.reportLayout);
-
+    const parsed = this.parseReport(data, capture.reportLayout);
     const rawBytes: number[] = [];
-    for (let i = 0; i < data.byteLength; i++) {
-      rawBytes.push(data.getUint8(i));
-    }
+    for (let i = 0; i < data.byteLength; i++) rawBytes.push(data.getUint8(i));
 
-    const rawState: FlightControlsState = {
+    this.emitSlotState(slot, {
       connected: true,
-      deviceName: this.device?.productName ?? "",
+      deviceName: capture.device.productName ?? "",
       axes: parsed.axes,
       buttons: parsed.buttons,
       hatSwitch: parsed.hatSwitch,
       rawBytes,
-    };
-    this.emitStateUpdate(rawState);
+    });
 
-    const gamepadState = this.mapToGamepad(parsed, this.profile);
-    if (this.hasGamepadStateChanged(gamepadState)) {
-      this.lastGamepadState = gamepadState;
+    const gamepadState = this.mapToGamepad(slot, parsed, capture.profile);
+    if (this.hasGamepadStateChanged(capture, gamepadState)) {
+      capture.lastGamepadState = gamepadState;
       this.emitGamepadState(gamepadState);
     }
   }
@@ -242,26 +250,15 @@ export class FlightHidService {
     const axes: number[] = [];
     for (const axisDef of layout.axes) {
       const byteIdx = axisDef.byteOffset;
-      if (byteIdx + axisDef.byteCount > data.byteLength) {
-        axes.push(0);
-        continue;
-      }
-
+      if (byteIdx + axisDef.byteCount > data.byteLength) { axes.push(0); continue; }
       let rawValue: number;
       if (axisDef.byteCount === 2) {
-        rawValue = axisDef.littleEndian
-          ? data.getUint16(byteIdx, true)
-          : data.getUint16(byteIdx, false);
-        if (!axisDef.unsigned && rawValue > 32767) {
-          rawValue = rawValue - 65536;
-        }
+        rawValue = axisDef.littleEndian ? data.getUint16(byteIdx, true) : data.getUint16(byteIdx, false);
+        if (!axisDef.unsigned && rawValue > 32767) rawValue = rawValue - 65536;
       } else {
         rawValue = data.getUint8(byteIdx);
-        if (!axisDef.unsigned && rawValue > 127) {
-          rawValue = rawValue - 256;
-        }
+        if (!axisDef.unsigned && rawValue > 127) rawValue = rawValue - 256;
       }
-
       const range = axisDef.rangeMax - axisDef.rangeMin;
       const normalized = range > 0 ? (rawValue - axisDef.rangeMin) / range : 0;
       axes.push(Math.max(0, Math.min(1, normalized)));
@@ -270,10 +267,7 @@ export class FlightHidService {
     const buttons: boolean[] = [];
     for (const btnDef of layout.buttons) {
       const byteIdx = btnDef.byteOffset;
-      if (byteIdx >= data.byteLength) {
-        buttons.push(false);
-        continue;
-      }
+      if (byteIdx >= data.byteLength) { buttons.push(false); continue; }
       const byte = data.getUint8(byteIdx);
       buttons.push((byte & (1 << btnDef.bitIndex)) !== 0);
     }
@@ -287,27 +281,20 @@ export class FlightHidService {
         hatSwitch = hatValue === layout.hat.centerValue ? -1 : hatValue;
       }
     }
-
     return { axes, buttons, hatSwitch };
   }
 
-  private mapToGamepad(parsed: ParsedReport, profile: FlightProfile): FlightGamepadState {
+  private mapToGamepad(slot: number, parsed: ParsedReport, profile: FlightProfile): FlightGamepadState {
     const state: FlightGamepadState = {
-      controllerId: this._controllerSlot,
-      buttons: 0,
-      leftTrigger: 0,
-      rightTrigger: 0,
-      leftStickX: 0,
-      leftStickY: 0,
-      rightStickX: 0,
-      rightStickY: 0,
+      controllerId: slot,
+      buttons: 0, leftTrigger: 0, rightTrigger: 0,
+      leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
       connected: true,
     };
 
     for (const mapping of profile.axisMappings) {
       if (mapping.sourceIndex >= parsed.axes.length) continue;
       const rawNormalized = parsed.axes[mapping.sourceIndex]!;
-
       let value: number;
       if (mapping.target === "leftTrigger" || mapping.target === "rightTrigger") {
         value = mapping.inverted ? 1 - rawNormalized : rawNormalized;
@@ -333,9 +320,7 @@ export class FlightHidService {
 
     for (const mapping of profile.buttonMappings) {
       if (mapping.sourceIndex >= parsed.buttons.length) continue;
-      if (parsed.buttons[mapping.sourceIndex]) {
-        state.buttons |= mapping.targetButton;
-      }
+      if (parsed.buttons[mapping.sourceIndex]) state.buttons |= mapping.targetButton;
     }
 
     if (parsed.hatSwitch >= 0) {
@@ -345,7 +330,6 @@ export class FlightHidService {
       if (hat === 3 || hat === 4 || hat === 5) state.buttons |= GAMEPAD_DPAD_DOWN;
       if (hat === 5 || hat === 6 || hat === 7) state.buttons |= GAMEPAD_DPAD_LEFT;
     }
-
     return state;
   }
 
@@ -362,24 +346,20 @@ export class FlightHidService {
   }
 
   private applyCurve(value: number, sensitivity: number, curve: string): number {
-    if (curve === "expo") {
-      return Math.pow(value, 2) * sensitivity;
-    }
+    if (curve === "expo") return Math.pow(value, 2) * sensitivity;
     return value * sensitivity;
   }
 
   private applyStickCurve(value: number, sensitivity: number, curve: string): number {
     const sign = value >= 0 ? 1 : -1;
     const abs = Math.abs(value);
-    if (curve === "expo") {
-      return sign * Math.pow(abs, 2) * sensitivity;
-    }
+    if (curve === "expo") return sign * Math.pow(abs, 2) * sensitivity;
     return value * sensitivity;
   }
 
-  private hasGamepadStateChanged(newState: FlightGamepadState): boolean {
-    if (!this.lastGamepadState) return true;
-    const prev = this.lastGamepadState;
+  private hasGamepadStateChanged(capture: SlotCapture, newState: FlightGamepadState): boolean {
+    if (!capture.lastGamepadState) return true;
+    const prev = capture.lastGamepadState;
     return (
       prev.buttons !== newState.buttons ||
       prev.leftTrigger !== newState.leftTrigger ||
@@ -391,43 +371,12 @@ export class FlightHidService {
     );
   }
 
-  private sendConnectedState(connected: boolean): void {
-    const state: FlightControlsState = {
-      connected,
-      deviceName: this.device?.productName ?? "",
-      axes: [],
-      buttons: [],
-      hatSwitch: -1,
-      rawBytes: [],
-    };
-    this.emitStateUpdate(state);
-
-    if (!connected) {
-      const disconnectState: FlightGamepadState = {
-        controllerId: this._controllerSlot,
-        buttons: 0,
-        leftTrigger: 0,
-        rightTrigger: 0,
-        leftStickX: 0,
-        leftStickY: 0,
-        rightStickX: 0,
-        rightStickY: 0,
-        connected: false,
-      };
-      this.emitGamepadState(disconnectState);
-    }
-  }
-
-  private emitStateUpdate(state: FlightControlsState): void {
-    for (const listener of this.stateListeners) {
-      listener(state);
-    }
+  private emitSlotState(slot: number, state: FlightControlsState): void {
+    for (const listener of this.stateListeners) listener(slot, state);
   }
 
   private emitGamepadState(state: FlightGamepadState): void {
-    for (const listener of this.gamepadListeners) {
-      listener(state);
-    }
+    for (const listener of this.gamepadListeners) listener(state);
   }
 }
 
