@@ -1,6 +1,7 @@
 import { Globe, Save, Check, Search, X, Loader, Zap, Mic, FileDown } from "lucide-react";
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import type { JSX } from "react";
+import { Monitor, Volume2, Mouse, Settings2, Globe, Save, Check, Search, X, Loader, Cpu, Zap, MessageSquare, Joystick, Sun } from "lucide-react";
+import { useState, useCallback, useMemo, useEffect } from "react";import type { JSX } from "react";
 
 import type {
   Settings,
@@ -10,7 +11,8 @@ import type {
   EntitledResolution,
   VideoAccelerationPreference,
   MicrophoneMode,
-} from "@shared/gfn";
+  HdrStreamingMode,
+  HdrCapability,} from "@shared/gfn";
 import { colorQualityRequiresHevc } from "@shared/gfn";
 import { formatShortcutForDisplay, normalizeShortcut } from "../shortcuts";
 
@@ -18,6 +20,7 @@ interface SettingsPageProps {
   settings: Settings;
   regions: StreamRegion[];
   onSettingChange: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
+  hdrCapability: HdrCapability | null;
 }
 
 const codecOptions: VideoCodec[] = ["H264", "H265", "AV1"];
@@ -432,7 +435,7 @@ async function testCodecSupport(): Promise<CodecTestResult[]> {
 
 /* ── Component ────────────────────────────────────────────────────── */
 
-export function SettingsPage({ settings, regions, onSettingChange }: SettingsPageProps): JSX.Element {
+export function SettingsPage({ settings, regions, onSettingChange, hdrCapability }: SettingsPageProps): JSX.Element {
   const [savedIndicator, setSavedIndicator] = useState(false);
   const [regionSearch, setRegionSearch] = useState("");
   const [regionDropdownOpen, setRegionDropdownOpen] = useState(false);
@@ -957,6 +960,64 @@ export function SettingsPage({ settings, regions, onSettingChange }: SettingsPag
                 How long the session timer stays visible each time it appears.
               </span>
             </div>
+          </div>
+        </section>
+
+        {/* ── HDR Streaming ──────────────────────────────── */}
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <Sun size={18} />
+            <h2>HDR Streaming</h2>
+          </div>
+          <div className="settings-rows">
+            <div className="settings-row">
+              <label className="settings-label">HDR Mode</label>
+              <div className="settings-chip-group">
+                {(["off", "auto", "on"] as HdrStreamingMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`settings-chip ${settings.hdrStreaming === mode ? "active" : ""}`}
+                    onClick={() => handleChange("hdrStreaming", mode)}
+                  >
+                    {mode === "off" ? "Off" : mode === "auto" ? "Auto" : "On"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {settings.hdrStreaming === "auto" && (
+              <span className="settings-input-hint">
+                HDR activates only when platform, display, OS, stream, and codec all confirm HDR support. Safest option.
+              </span>
+            )}
+            {settings.hdrStreaming === "on" && (
+              <span className="settings-input-hint">
+                Forces HDR attempt. Falls back to SDR with a warning if any condition fails.
+              </span>
+            )}
+
+            {settings.hdrStreaming !== "off" && !settings.colorQuality.startsWith("10bit") && (
+              <span className="settings-input-hint" style={{ color: "var(--warning)" }}>
+                HDR requires 10-bit color quality. Switch Color Quality to a 10-bit mode to enable HDR.
+              </span>
+            )}
+
+            {hdrCapability && (
+              <div className="settings-row settings-row--column" style={{ gap: "6px" }}>
+                <label className="settings-label" style={{ fontSize: "12px", opacity: 0.7 }}>Platform Capability</label>
+                <div style={{ fontSize: "12px", lineHeight: "1.6", opacity: 0.8, fontFamily: "var(--font-mono, monospace)" }}>
+                  <div>Platform: <strong>{hdrCapability.platform}</strong> — {hdrCapability.platformSupport}</div>
+                  <div>OS HDR: <strong>{hdrCapability.osHdrEnabled ? "Enabled" : "Disabled"}</strong></div>
+                  <div>Display HDR: <strong>{hdrCapability.displayHdrCapable ? "Capable" : "Not detected"}</strong></div>
+                  <div>10-bit Decode: <strong>{hdrCapability.decoder10BitCapable ? "Supported" : "Not available"}</strong></div>
+                  <div>HDR Color Space: <strong>{hdrCapability.hdrColorSpaceSupported ? "Supported" : "Not detected"}</strong></div>
+                </div>
+              </div>
+            )}
+            {!hdrCapability && settings.hdrStreaming !== "off" && (
+              <span className="settings-input-hint">Probing HDR capability...</span>
+            )}
           </div>
         </section>
 

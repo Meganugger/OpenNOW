@@ -44,7 +44,10 @@ import {
 import { fetchSubscription, fetchDynamicRegions } from "./gfn/subscription";
 import { GfnSignalingClient } from "./gfn/signaling";
 import { isSessionError, SessionError, GfnErrorCode } from "./gfn/errorCodes";
-
+import { isSessionError, SessionError } from "./gfn/errorCodes";
+import { DiscordPresenceService } from "./discord/DiscordPresenceService";
+import { FlightProfileManager } from "./flight/FlightProfiles";
+import { getOsHdrInfo } from "./hdr/hdrDetect";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -501,7 +504,9 @@ function registerIpcHandlers(): void {
   });
 
   // Save window size when it changes
-  mainWindow?.on("resize", () => {
+  ipcMain.handle(IPC_CHANNELS.HDR_GET_OS_INFO, () => {
+    return getOsHdrInfo();
+  });  mainWindow?.on("resize", () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       const [width, height] = mainWindow.getSize();
       settingsManager.set("windowWidth", width);
