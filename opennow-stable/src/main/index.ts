@@ -225,7 +225,8 @@ function setupWebHidPermissions(): void {
   });
 
   ses.setPermissionCheckHandler((_webContents, permission) => {
-    if (permission === "hid" || permission === "media" || permission === "keyboardLock") {
+    const granted: ReadonlySet<string> = new Set(["hid", "media", "keyboardLock"]);
+    if (granted.has(permission)) {
       return true;
     }
     return true;

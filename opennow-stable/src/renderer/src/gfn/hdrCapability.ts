@@ -10,6 +10,77 @@ import type {
 
 const api = (window as unknown as { openNow: { getOsHdrInfo: () => Promise<{ osHdrEnabled: boolean; platform: string }> } }).openNow;
 
+export type HdrDetectionStatus =
+  | "idle"
+  | "probing"
+  | "supported"
+  | "unsupported"
+  | "os_disabled"
+  | "active"
+  | "error";
+
+let cachedCapability: HdrCapability | null = null;
+let cachedDetectionStatus: HdrDetectionStatus = "idle";
+let probeInFlight: Promise<HdrCapability> | null = null;
+
+export function getHdrDetectionStatus(): HdrDetectionStatus {
+  return cachedDetectionStatus;
+}
+
+export function getCachedHdrCapability(): HdrCapability | null {
+  return cachedCapability;
+}
+
+function deriveDetectionStatus(cap: HdrCapability): HdrDetectionStatus {
+  if (cap.platformSupport === "unsupported") return "unsupported";
+  if (cap.platformSupport === "unknown") return "unsupported";
+  if (!cap.decoder10BitCapable || !cap.displayHdrCapable) return "unsupported";
+  if (cap.platform === "windows" && !cap.osHdrEnabled && cap.displayHdrCapable) return "os_disabled";
+  if (cap.platformSupport === "supported" && cap.osHdrEnabled && cap.displayHdrCapable) return "active";
+  if (cap.platformSupport === "best_effort" && cap.displayHdrCapable) return "supported";
+  return "supported";
+}
+
+export function getHdrStatusLabel(
+  mode: HdrStreamingMode,
+  detectionStatus: HdrDetectionStatus,
+): string {
+  if (mode === "off") return "HDR off";
+
+  if (mode === "auto") {
+    switch (detectionStatus) {
+      case "idle":
+      case "probing":
+        return "Detecting HDR\u2026";
+      case "unsupported":
+      case "error":
+        return "HDR not supported";
+      case "os_disabled":
+        return "HDR supported (enable in OS settings)";
+      case "active":
+      case "supported":
+        return "HDR active";
+    }
+  }
+
+  if (mode === "on") {
+    switch (detectionStatus) {
+      case "idle":
+      case "probing":
+        return "Detecting HDR\u2026";
+      case "unsupported":
+      case "error":
+        return "Forced HDR (may not be supported)";
+      case "active":
+      case "supported":
+      case "os_disabled":
+        return "HDR active (forced)";
+    }
+  }
+
+  return "HDR off";
+}
+
 function detectPlatform(): "windows" | "macos" | "linux" | "unknown" {
   const ua = navigator.userAgent.toLowerCase();
   if (ua.includes("win")) return "windows";
@@ -142,6 +213,26 @@ function getPlatformSupport(platform: string, osHdrEnabled: boolean, displayCapa
 }
 
 export async function probeHdrCapability(): Promise<HdrCapability> {
+  if (probeInFlight) return probeInFlight;
+
+  cachedDetectionStatus = "probing";
+  probeInFlight = doProbe();
+
+  try {
+    const result = await probeInFlight;
+    cachedCapability = result;
+    cachedDetectionStatus = deriveDetectionStatus(result);
+    return result;
+  } catch {
+    cachedDetectionStatus = "error";
+    if (cachedCapability) return cachedCapability;
+    throw new Error("HDR probe failed and no cached result available");
+  } finally {
+    probeInFlight = null;
+  }
+}
+
+async function doProbe(): Promise<HdrCapability> {
   const platform = detectPlatform();
   const notes: string[] = [];
 

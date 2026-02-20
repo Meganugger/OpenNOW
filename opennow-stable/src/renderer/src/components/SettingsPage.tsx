@@ -20,7 +20,7 @@ import { colorQualityRequiresHevc } from "@shared/gfn";
 import { formatShortcutForDisplay, normalizeShortcut } from "../shortcuts";
 import { FlightControlsPanel } from "./FlightControlsPanel";
 import { useToast } from "./Toast";
-import { probeHdrCapability } from "../gfn/hdrCapability";
+import { probeHdrCapability, getHdrDetectionStatus, getHdrStatusLabel, type HdrDetectionStatus } from "../gfn/hdrCapability";
 
 interface SettingsPageProps {
   settings: Settings;
@@ -443,6 +443,8 @@ export function SettingsPage({ settings, regions, onSettingChange, hdrCapability
   const [hdrDiagTesting, setHdrDiagTesting] = useState(false);
   const [hdrDiagOpen, setHdrDiagOpen] = useState(false);
   const [hdrRefreshing, setHdrRefreshing] = useState(false);
+  const [hdrDetectionStatus, setHdrDetectionStatus] = useState<HdrDetectionStatus>(getHdrDetectionStatus);
+  const [hevcWarningShown, setHevcWarningShown] = useState(false);
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
 
   useEffect(() => {
@@ -484,8 +486,10 @@ export function SettingsPage({ settings, regions, onSettingChange, hdrCapability
     try {
       const cap = await probeHdrCapability();
       setHdrDiagResult(cap);
+      setHdrDetectionStatus(getHdrDetectionStatus());
     } catch (err) {
       console.error("[HDR] Diagnostics failed:", err);
+      setHdrDetectionStatus(getHdrDetectionStatus());
     } finally {
       setHdrDiagTesting(false);
     }
@@ -493,11 +497,14 @@ export function SettingsPage({ settings, regions, onSettingChange, hdrCapability
 
   const refreshHdrStatus = useCallback(async () => {
     setHdrRefreshing(true);
+    setHdrDetectionStatus("probing");
     try {
       const cap = await probeHdrCapability();
       setHdrDiagResult(cap);
+      setHdrDetectionStatus(getHdrDetectionStatus());
     } catch (err) {
       console.error("[HDR] Refresh failed:", err);
+      setHdrDetectionStatus(getHdrDetectionStatus());
     } finally {
       setHdrRefreshing(false);
     }
@@ -506,6 +513,7 @@ export function SettingsPage({ settings, regions, onSettingChange, hdrCapability
   useEffect(() => {
     if (hdrCapability) {
       setHdrDiagResult(hdrCapability);
+      setHdrDetectionStatus(getHdrDetectionStatus());
     }
   }, [hdrCapability]);
 
@@ -938,12 +946,23 @@ export function SettingsPage({ settings, regions, onSettingChange, hdrCapability
                   <button
                     key={`hevc-compat-${option.value}`}
                     className={`settings-chip ${settings.hevcCompatMode === option.value ? "active" : ""}`}
-                    onClick={() => handleChange("hevcCompatMode", option.value)}
+                    onClick={() => {
+                      handleChange("hevcCompatMode", option.value);
+                      if (!hevcWarningShown) setHevcWarningShown(true);
+                    }}
+                    onFocus={() => {
+                      if (!hevcWarningShown) setHevcWarningShown(true);
+                    }}
                   >
                     {option.label}
                   </button>
                 ))}
               </div>
+              {hevcWarningShown && (settings.codec === "H265" || settings.codec === "AV1") && (
+                <span className="settings-input-hint" style={{ color: "var(--warning)" }}>
+                  &#9888; HEVC compatibility mode is intended only for AMD Polaris/Vega GPUs (e.g., RX 400/500 series, Vega iGPUs). Other GPUs typically don&apos;t need this.
+                </span>
+              )}
               <span className="settings-subtle-hint">
                 Auto disables HEVC on AMD Polaris/Vega GPUs (RX 550, Vega iGPU) to prevent green screen.
               </span>
@@ -1098,18 +1117,15 @@ export function SettingsPage({ settings, regions, onSettingChange, hdrCapability
               </span>
             )}
 
-            {settings.hdrStreaming !== "off" && hdrDiagResult && (
+            {settings.hdrStreaming !== "off" && (
               (() => {
-                const cap = hdrDiagResult;
-                const statusLabel = cap.platformSupport === "supported" ? "Supported"
-                  : cap.platformSupport === "best_effort"
-                    ? (cap.platform === "windows" && !cap.osHdrEnabled && cap.displayHdrCapable
-                        ? "Available (OS HDR is Off)"
-                        : cap.platform === "macos" ? "Best Effort (macOS)" : "Best Effort")
-                    : cap.platform === "linux" ? "Not supported (Linux Electron limitation)"
-                    : "Unknown";
-                const statusColor = cap.platformSupport === "supported" ? "var(--success)"
-                  : cap.platformSupport === "best_effort" ? "var(--warning)" : "var(--error)";
+                const statusLabel = getHdrStatusLabel(settings.hdrStreaming, hdrDetectionStatus);
+                const statusColor =
+                  hdrDetectionStatus === "active" || hdrDetectionStatus === "supported"
+                    ? "var(--success)"
+                    : hdrDetectionStatus === "os_disabled" || hdrDetectionStatus === "probing" || hdrDetectionStatus === "idle"
+                      ? "var(--warning)"
+                      : "var(--error)";
 
                 return (
                   <div className="settings-row" style={{ alignItems: "center" }}>

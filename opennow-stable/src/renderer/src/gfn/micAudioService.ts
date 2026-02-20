@@ -387,7 +387,7 @@ export class MicAudioService {
     if (!this.peerConnection || !this.rtcSender) return;
 
     try {
-      const report = await this.peerConnection.getStats(this.rtcSender);
+      const report = await this.peerConnection.getStats(this.rtcSender.track ?? null);
       for (const entry of report.values()) {
         const stats = entry as unknown as Record<string, unknown>;
         if (entry.type === "outbound-rtp" && stats.kind === "audio") {

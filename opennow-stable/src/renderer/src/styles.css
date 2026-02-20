@@ -1351,10 +1351,9 @@ body,
   border-radius: var(--r-sm);
   border: 1px solid var(--panel-border);
   overflow: hidden;
-  flex-wrap: wrap;
 }
 .settings-seg-btn {
-  flex: 1 1 0;
+  flex: 1 1 0%;
   min-width: 0;
   padding: 8px 14px;
   background: transparent;
