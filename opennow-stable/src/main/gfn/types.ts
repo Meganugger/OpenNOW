@@ -77,6 +77,7 @@ export interface CloudMatchResponse {
     status: number;
     errorCode?: number;
     gpuType?: string;
+    queuePosition?: number;
     connectionInfo?: Array<{
       ip?: string;
       port: number;
