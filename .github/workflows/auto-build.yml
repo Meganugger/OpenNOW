@@ -61,6 +61,7 @@ jobs:
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
       npm_config_audit: "false"
       npm_config_fund: "false"
+      PATH: /var/lib/gems/3.1.0/bin:/home/runner/.local/share/gem/ruby/3.1.0/bin:${{ env.PATH }}
 
     steps:
       - name: Checkout
@@ -97,7 +98,12 @@ jobs:
         if: runner.os == 'Linux' && !matrix.emulate_arm64
         run: |
           sudo apt-get update
-          sudo apt-get install -y fakeroot rpm fpm
+          sudo apt-get install -y fakeroot rpm ruby ruby-dev build-essential
+          sudo gem install --no-document fpm
+          echo "/var/lib/gems/3.1.0/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/share/gem/ruby/3.1.0/bin" >> $GITHUB_PATH
+          command -v fpm
+          fpm --version
 
       - name: Install dependencies
         if: '!matrix.emulate_arm64'
@@ -118,15 +124,17 @@ jobs:
             -e USE_SYSTEM_FPM=true \
             -e ELECTRON_CACHE=/work/.cache/electron \
             -e ELECTRON_BUILDER_CACHE=/work/.cache/electron-builder \
+            -e PATH=/root/.local/share/gem/ruby/3.1.0/bin:/var/lib/gems/3.1.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             -v "${{ github.workspace }}:/work" \
             -w /work/opennow-stable \
             node:22-bookworm bash -lc '
               set -e
               apt-get update
-              apt-get install -y fakeroot rpm fpm
-              rm -rf /root/.cache/electron-builder/fpm
+              apt-get install -y fakeroot rpm ruby ruby-dev build-essential
+              gem install --no-document fpm
               command -v fpm
               fpm --version
+              rm -rf /root/.cache/electron-builder/fpm
               npm ci --prefer-offline --no-audit --progress=false
               npm run build
               npx electron-builder --publish never --linux AppImage deb --arm64
