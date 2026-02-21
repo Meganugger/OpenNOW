@@ -20,6 +20,7 @@ import {
   type GamepadInput,
 } from "./inputProtocol";
 import { remapVkForLayout } from "./keyboardLayout";
+import { charToUsKeystroke } from "./keyboardCharMap";
 import {
   buildNvstSdp,
   extractIceCredentials,
@@ -486,6 +487,8 @@ export class GfnWebRtcClient {
 
   // Track currently pressed keys (VK codes) for synthetic Escape detection
   private pressedKeys: Set<number> = new Set();
+  // Keys handled via character-level translation — skip their keyup in the normal path
+  private charTranslatedCodes: Set<string> = new Set();
   // Video element reference for pointer lock re-acquisition
   private videoElement: HTMLVideoElement | null = null;
   // Timer for synthetic Escape on pointer lock loss
@@ -1931,7 +1934,44 @@ export class GfnWebRtcClient {
         return;
       }
 
-      // Remap VK code for non-QWERTY layouts. Scancodes stay physical.
+      // ── Character-level translation for non-QWERTY layouts ──────────
+      // When the local layout isn't QWERTY, the physical scancode maps to
+      // the wrong character on the US-QWERTY remote VM.  For printable
+      // characters we look up which US key + modifiers produce that char
+      // and send those instead.  Ctrl/Meta combos (shortcuts) bypass this
+      // so Ctrl+C / Ctrl+V etc. stay scancode-based and work correctly.
+      if (
+        this.effectiveKeyboardLayout !== "qwerty"
+        && event.key.length === 1
+        && !event.ctrlKey
+        && !event.metaKey
+      ) {
+        const usKey = charToUsKeystroke(event.key);
+        if (usKey) {
+          const usMapped = mapKeyboardEvent({ code: usKey.code } as KeyboardEvent);
+          if (usMapped) {
+            // Build modifier flags: carry over Alt from the real event (AltGr
+            // may be active on the local side), then set/clear Shift to match
+            // what the US layout requires for this character.
+            let mods = 0;
+            if (usKey.shift) mods |= 0x01;
+            if (event.altKey && !usKey.shift) mods |= 0x04;
+            if (event.getModifierState("CapsLock")) mods |= 0x10;
+            if (event.getModifierState("NumLock")) mods |= 0x20;
+
+            // Send the key using the US-QWERTY VK + scancode.
+            // We send both keydown and keyup immediately so the remote side
+            // sees a clean press/release for this character.  The real keyup
+            // will be ignored via charTranslatedCodes.
+            this.sendKeyPacket(usMapped.vk, usMapped.scancode, mods, true);
+            this.sendKeyPacket(usMapped.vk, usMapped.scancode, mods, false);
+            this.charTranslatedCodes.add(event.code);
+            return;
+          }
+        }
+      }
+
+      // ── Default path: physical scancode + VK remap ──────────────────
       const remappedVk = remapVkForLayout(mapped.vk, this.effectiveKeyboardLayout);
 
       const payload = this.inputEncoder.encodeKeyDown({
@@ -1947,6 +1987,13 @@ export class GfnWebRtcClient {
 
     const onKeyUp = (event: KeyboardEvent) => {
       if (!this.inputReady || this.activeInputMode === "gamepad") {
+        return;
+      }
+
+      // If this key was handled via character-level translation on keydown,
+      // we already sent both keydown+keyup there — skip the real keyup.
+      if (this.charTranslatedCodes.delete(event.code)) {
+        event.preventDefault();
         return;
       }
 
