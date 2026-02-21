@@ -493,6 +493,130 @@ export function SettingsPage({ settings, regions, onSettingChange }: SettingsPag
   const [toggleAntiAfkError, setToggleAntiAfkError] = useState(false);
   const [toggleMicrophoneError, setToggleMicrophoneError] = useState(false);
 
+  const [micDevices, setMicDevices] = useState<MicDeviceInfo[]>([]);
+  const [micDevicesLoading, setMicDevicesLoading] = useState(false);
+  const [micToggleShortcutInput, setMicToggleShortcutInput] = useState(settings.shortcutToggleMic);
+  const [micToggleShortcutError, setMicToggleShortcutError] = useState(false);
+  const micLevelRef = useRef<HTMLDivElement>(null);
+  const [micTestLevel, setMicTestLevel] = useState(0);
+  const [micTestRunning, setMicTestRunning] = useState(false);
+  const [micTestError, setMicTestError] = useState<string | null>(null);
+  const micTestStreamRef = useRef<MediaStream | null>(null);
+  const micTestContextRef = useRef<AudioContext | null>(null);
+  const micTestTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const micTestAnalyserRef = useRef<AnalyserNode | null>(null);
+  const micTestBufferRef = useRef<Float32Array<ArrayBuffer> | null>(null);
+
+  const refreshMicDevices = useCallback(async () => {
+    setMicDevicesLoading(true);
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter((d) => d.kind === "audioinput" && d.deviceId !== "");
+      const defaultDev = audioInputs.find((d) => d.deviceId === "default");
+      const defaultGroupId = defaultDev?.groupId;
+      const mapped: MicDeviceInfo[] = audioInputs.map((d) => ({
+        deviceId: d.deviceId,
+        label: d.label || `Microphone (${d.deviceId.slice(0, 8)})`,
+        isDefault: d.deviceId === "default" || (!!defaultGroupId && d.groupId === defaultGroupId && d.deviceId !== "default"),
+      }));
+      setMicDevices(mapped);
+    } catch {
+      setMicDevices([]);
+    } finally {
+      setMicDevicesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshMicDevices();
+    const handler = (): void => { void refreshMicDevices(); };
+    navigator.mediaDevices.addEventListener("devicechange", handler);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", handler);
+  }, [refreshMicDevices]);
+
+  useEffect(() => {
+    setMicToggleShortcutInput(settings.shortcutToggleMic);
+  }, [settings.shortcutToggleMic]);
+
+  const startMicTest = useCallback(async () => {
+    setMicTestError(null);
+    try {
+      const constraints: MediaStreamConstraints = {
+        audio: {
+          deviceId: settings.micDeviceId ? { exact: settings.micDeviceId } : undefined,
+          noiseSuppression: { ideal: settings.micNoiseSuppression },
+          autoGainControl: { ideal: settings.micAutoGainControl },
+          echoCancellation: { ideal: settings.micEchoCancellation },
+        },
+        video: false,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      micTestStreamRef.current = stream;
+
+      const ctx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
+      micTestContextRef.current = ctx;
+
+      const src = ctx.createMediaStreamSource(stream);
+      const gain = ctx.createGain();
+      gain.gain.value = settings.micGain;
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.3;
+      micTestAnalyserRef.current = analyser;
+      micTestBufferRef.current = new Float32Array(analyser.fftSize) as Float32Array<ArrayBuffer>;
+
+      src.connect(gain);
+      gain.connect(analyser);
+
+      micTestTimerRef.current = setInterval(() => {
+        if (!micTestAnalyserRef.current || !micTestBufferRef.current) return;
+        micTestAnalyserRef.current.getFloatTimeDomainData(micTestBufferRef.current);
+        let sum = 0;
+        for (let i = 0; i < micTestBufferRef.current.length; i++) {
+          const v = micTestBufferRef.current[i];
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / micTestBufferRef.current.length);
+        const db = 20 * Math.log10(Math.max(rms, 1e-10));
+        setMicTestLevel(Math.max(0, Math.min(1, (db + 60) / 60)));
+      }, 50);
+
+      setMicTestRunning(true);
+    } catch (err: unknown) {
+      setMicTestLevel(0);
+      setMicTestRunning(false);
+      if (err instanceof DOMException && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError")) {
+        setMicTestError("Microphone permission denied");
+      } else if (err instanceof DOMException && (err.name === "NotFoundError" || err.name === "OverconstrainedError")) {
+        setMicTestError("No microphone found");
+      } else {
+        setMicTestError("Failed to access microphone");
+      }
+    }
+  }, [settings.micDeviceId, settings.micGain, settings.micNoiseSuppression, settings.micAutoGainControl, settings.micEchoCancellation]);
+
+  const stopMicTest = useCallback(() => {
+    if (micTestTimerRef.current) {
+      clearInterval(micTestTimerRef.current);
+      micTestTimerRef.current = null;
+    }
+    if (micTestContextRef.current) {
+      void micTestContextRef.current.close().catch(() => {});
+      micTestContextRef.current = null;
+    }
+    if (micTestStreamRef.current) {
+      for (const track of micTestStreamRef.current.getTracks()) track.stop();
+      micTestStreamRef.current = null;
+    }
+    micTestAnalyserRef.current = null;
+    micTestBufferRef.current = null;
+    setMicTestLevel(0);
+    setMicTestRunning(false);
+  }, []);
+
+  useEffect(() => {
+    return () => stopMicTest();
+  }, [stopMicTest]);
   // Dynamic entitled resolutions from MES API
   const [entitledResolutions, setEntitledResolutions] = useState<EntitledResolution[]>([]);
   const [subscriptionLoading, setSubscriptionLoading] = useState(true);
@@ -1270,13 +1394,32 @@ export function SettingsPage({ settings, regions, onSettingChange }: SettingsPag
 
                   <div className="settings-row" style={{ marginTop: 6 }}>
                     <label className="settings-label">Input Level</label>
-                    <div className="mic-level-meter">
-                      <div
-                        className="mic-level-meter-fill"
-                        ref={micLevelRef}
-                        style={{ transform: `scaleX(${micTestLevel})` }}
-                      />
+                    <div className="mic-test-meter-wrap">
+                      <div className="mic-level-meter">
+                        <div
+                          className="mic-level-meter-fill"
+                          ref={micLevelRef}
+                          style={{ transform: `scaleX(${micTestLevel})` }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="settings-shortcut-reset-btn mic-test-btn"
+                        onClick={() => {
+                          if (micTestRunning) {
+                            stopMicTest();
+                          } else {
+                            void startMicTest();
+                          }
+                        }}
+                      >
+                        {micTestRunning ? <MicOff size={12} /> : <Mic size={12} />}
+                        {micTestRunning ? "Stop" : "Test"}
+                      </button>
                     </div>
+                    {micTestError && (
+                      <span className="mic-test-error">{micTestError}</span>
+                    )}
                   </div>
 
                   <div className="settings-row" style={{ marginTop: 6 }}>
