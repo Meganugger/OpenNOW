@@ -61,7 +61,6 @@ jobs:
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
       npm_config_audit: "false"
       npm_config_fund: "false"
-      PATH: /var/lib/gems/3.1.0/bin:/home/runner/.local/share/gem/ruby/3.1.0/bin:${{ env.PATH }}
 
     steps:
       - name: Checkout
